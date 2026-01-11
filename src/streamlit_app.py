@@ -1,11 +1,11 @@
 import sys
 from pathlib import Path
 
-# Ensure src/ is on the path so waystone_core can be imported
+# Ensure src/ is on the path
 sys.path.append(str(Path(__file__).resolve().parent))
 
 import streamlit as st
-from waystone_core import STATE, retrieve_chunks
+from waystone_core import STATE, answer
 
 
 # ------------------
@@ -30,12 +30,10 @@ with st.sidebar:
         step=1,
     )
 
-    k = st.slider(
-        "Chunks (k)",
-        min_value=3,
-        max_value=20,
-        value=8,
-        step=1,
+    STATE["model"] = st.selectbox(
+        "Ollama model",
+        options=["qwen2.5:14b", "llama3.1:8b", "mistral", "llama3.2:3b"],
+        index=0,  # Makes qwen2.5:14b the default
     )
 
     STATE["debug"] = st.checkbox(
@@ -50,7 +48,11 @@ with st.sidebar:
 # Header
 # ------------------
 st.title("🍺 The Waystone Companion")
-st.caption(f"Book: {STATE['book']} · Chapter limit: {STATE['chapter']}")
+st.caption(
+    f"Book: {STATE['book']} · "
+    f"Chapter limit: {STATE['chapter']} · "
+    f"Model: {STATE['model']}"
+)
 
 # ------------------
 # Session state
@@ -78,60 +80,31 @@ if prompt:
 
     # Assistant response
     with st.chat_message("assistant"):
-        with st.spinner("Searching the book…"):
-            if STATE["debug"]:
-                chunks, dbg = retrieve_chunks(
-                    query=prompt,
-                    max_chapter=int(STATE["chapter"]),
-                    k=int(k),
-                    debug=True,
-                )
-            else:
-                chunks = retrieve_chunks(
-                    query=prompt,
-                    max_chapter=int(STATE["chapter"]),
-                    k=int(k),
-                    debug=False,
-                )
+        with st.spinner("Thinking…"):
+            out = answer(
+                question=prompt,
+                current_chapter=int(STATE["chapter"]),
+                model=str(STATE["model"]),
+            )
 
-            if not chunks:
-                st.markdown(
-                    "I didn’t find any passages within your spoiler boundary."
-                )
-            else:
-                # --- Show a minimal, readable result ---
-                st.markdown("**Relevant passages found.**")
+            # Main answer
+            st.markdown(out["answer"])
 
-                # Show top N passages inline
-                TOP_N = 2
-                for c in chunks[:TOP_N]:
-                    st.markdown(
-                        f"**{c.get('chunk_id','')}** "
-                        f"(Chapter {c.get('chapter')}, Score {c.get('score'):.3f})"
-                    )
-                    st.markdown(c.get("text", ""))
-                    st.divider()
+            # Sources (collapsed)
+            if out.get("sources"):
+                with st.expander("Show sources"):
+                    for s in out["sources"]:
+                        st.markdown(
+                            f"- **{s['chunk_id']}** "
+                            f"(Chapter {s['chapter']}, score {s['score']:.3f})"
+                        )
 
-                # Collapse the rest
-                if len(chunks) > TOP_N:
-                    with st.expander("Show all retrieved passages"):
-                        for c in chunks[TOP_N:]:
-                            st.markdown(
-                                f"**{c.get('chunk_id','')}** "
-                                f"(Chapter {c.get('chapter')}, Score {c.get('score'):.3f})"
-                            )
-                            st.markdown(c.get("text", ""))
-                            st.divider()
-
-            # Optional debug output
-            if STATE["debug"]:
+            # Debug (optional)
+            if STATE["debug"] and out.get("debug"):
                 st.subheader("Debug")
-                st.json(dbg)
+                st.json(out["debug"])
 
-    # Lightweight assistant acknowledgement (keeps chat flow natural)
+    # Persist assistant message
     st.session_state.messages.append(
-        {
-            "role": "assistant",
-            "content": "I found relevant passages from the text. (LLM synthesis coming next.)",
-        }
+        {"role": "assistant", "content": out["answer"]}
     )
